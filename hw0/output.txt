@@ -4,4 +4,4 @@ name:
    last: Shen
 email: qinlans@cs.cmu.edu
 leaderboard: Austin Meowtthews
-languages: [eng,wuu,jpn,cmn,ase]
+languages: [eng,wuu,jpn,cmn,ase,fra]
