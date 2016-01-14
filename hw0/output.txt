@@ -3,5 +3,5 @@ name:
    first: Qinlan
    last: Shen
 email: qinlans@cs.cmu.edu
-leaderboard: Austin Meotthews
+leaderboard: Austin Meowtthews
 languages: [eng,wuu,jpn,cmn,ase]
