@@ -4,4 +4,4 @@ name:
    last: Clothiaux
 email: dclothia@andrew.cmu.edu
 leaderboard: Austin Matthews
-languages: [eng,jpn]
+languages: [eng,jpn, cmn]
