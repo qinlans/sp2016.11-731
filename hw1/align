@@ -93,8 +93,9 @@ for i in range(5):
           exp_count[f[i], e[j]] += probs[f[i], e[j]]/norm[e[j]]
           total_count[f[i]] += probs[f[i], e[j]]/norm[e[j]]
   
-  for i in f_count:
-    for j in e_count:
+  for (n, (f, e)) in enumerate(bitext):
+    for i in f:
+      for j in e:
         '''
         print 'e ',
         print len(e)
