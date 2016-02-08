@@ -3,64 +3,83 @@ import optparse
 import sys
 from collections import defaultdict
 
+def align(bitext, iterations):
+  # Initialize uniform translation probabilities
+  wordset = set()
+  for (n, (g, e)) in enumerate(bitext):
+      for j in range(len(e)):
+          wordset.add(e[j])
+
+  uniform_prob = 1.0/len(wordset)
+
+  prob = defaultdict(float)
+
+  for (n, (g, e)) in enumerate(bitext):
+      for i in range(len(g)):
+          for j in range(len(e)):
+              prob[e[j], g[i]] = uniform_prob
+
+  # EM
+  for it in range(iterations):
+      count = defaultdict(float)
+      exp_norm = defaultdict(float)
+      prob_norm = defaultdict(float)
+
+      for (n, (g, e)) in enumerate(bitext):
+          # Normalization for expectations
+          for j in range(len(e)):
+              exp_norm[e[j]] = 0
+              for i in range(len(g)):
+                  exp_norm[e[j]] += prob[e[j], g[i]]
+
+          for j in range(len(e)):
+              for i in range(len(g)):
+                  # Expected number of times g word was aligned to e word
+                  count[e[j], g[i]] += prob[e[j], g[i]]/exp_norm[e[j]]
+                  # Expected number of times g word was used as a translation source
+                  prob_norm[g[i]] += prob[e[j], g[i]]/exp_norm[e[j]]
+
+      for (n, (g, e)) in enumerate(bitext):
+          for i in range(len(g)):
+              for j in range(len(e)):
+                  prob[e[j], g[i]] = count[e[j], g[i]]/prob_norm[g[i]]
+
+  alignments = []
+  for (n, (g, e)) in enumerate(bitext):
+      alignments.append([])
+      for j in range(len(e)):
+          max_prob = 0
+          max_index = 0
+          for i in range(len(g)):
+              if prob[e[j], g[i]] > max_prob:
+                  max_prob = prob[e[j], g[i]]
+                  max_index = i
+
+          alignments[n].append((max_index, j))
+  return alignments
+    
+
 optparser = optparse.OptionParser()
 optparser.add_option("-b", "--bitext", dest="bitext", default="data/dev-test-train.de-en", help="Parallel corpus (default data/dev-test-train.de-en)")
 optparser.add_option("-i", "--iterations", dest="iterations", default=5, type="int", help="Number of iterations to run EM (default=5)")
 optparser.add_option("-n", "--num_sentences", dest="num_sents", default=sys.maxint, type="int", help="Number of sentences to use for training and alignment")
 (opts, _) = optparser.parse_args()
 
-sys.stderr.write("Training with Model1...")
-bitext = [[sentence.strip().split() for sentence in pair.split(' ||| ')] for pair in open(opts.bitext)][:opts.num_sents]
+sys.stderr.write("Training...\n")
+forward = [[sentence.strip().split() for sentence in pair.split(' ||| ')] for pair in open(opts.bitext)][:opts.num_sents]
+reverse = [[t[1], t[0]] for t in forward]
 
-# Initialize uniform translation probabilities
-e_wordset = set()
-for (n, (g, e)) in enumerate(bitext):
-    for j in range(len(e)):
-        e_wordset.add(e[j])
+forward_align = align(forward, opts.iterations)
+reverse_align = align(reverse, opts.iterations)
 
-uniform_prob = 1.0/len(e_wordset)
+alignments = []
+for n in range(len(forward_align)):
+    alignments.append([])
+    for (i, j) in forward_align[n]:
+        if (j, i) in reverse_align[n]:
+            alignments[n].append((i, j))
 
-prob = defaultdict(float)
-
-for (n, (g, e)) in enumerate(bitext):
-    for i in range(len(g)):
-        for j in range(len(e)):
-            prob[e[j], g[i]] = uniform_prob
-
-# EM
-for it in range(opts.iterations):
-    count = defaultdict(float)
-    exp_norm = defaultdict(float)
-    prob_norm = defaultdict(float)
-
-    for (n, (g, e)) in enumerate(bitext):
-
-        # Normalization for expectations
-        for j in range(len(e)):
-            exp_norm[e[j]] = 0
-            for i in range(len(g)):
-                exp_norm[e[j]] += prob[e[j], g[i]]
-
-        for j in range(len(e)):
-            for i in range(len(g)):
-                # Expected number of times g word was aligned to e word
-                count[e[j], g[i]] += prob[e[j], g[i]]/exp_norm[e[j]]
-                # Expected number of times g word was used as a translation source
-                prob_norm[g[i]] += prob[e[j], g[i]]/exp_norm[e[j]]
-
-    for (n, (g, e)) in enumerate(bitext):
-        for i in range(len(g)):
-            for j in range(len(e)):
-                prob[e[j], g[i]] = count[e[j], g[i]]/prob_norm[g[i]]
-
-for (n, (g, e)) in enumerate(bitext):
-    for j in range(len(e)):
-        max_prob = 0
-        max_index = 0
-        for i in range(len(g)):
-            if prob[e[j], g[i]] > max_prob:
-                max_prob = prob[e[j], g[i]]
-                max_index = i
-
-        sys.stdout.write("%i-%i " % (max_index,j))
+for i in range(len(alignments)):
+    for (j, k) in alignments[i]:
+        sys.stdout.write("%i-%i " % (j, k))
     sys.stdout.write("\n")
