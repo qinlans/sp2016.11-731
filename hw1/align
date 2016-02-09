@@ -23,7 +23,7 @@ def find_neighbors(x, y, x_upper, y_upper):
 
     return neighbors
 
-def align(bitext, iterations):
+def model(bitext, iterations):
   # Initialize uniform translation probabilities
   wordset = set()
   for (n, (g, e)) in enumerate(bitext):
@@ -103,7 +103,7 @@ def align(bitext, iterations):
 
 optparser = optparse.OptionParser()
 optparser.add_option("-b", "--bitext", dest="bitext", default="data/dev-test-train.de-en", help="Parallel corpus (default data/dev-test-train.de-en)")
-optparser.add_option("-i", "--iterations", dest="iterations", default=5, type="int", help="Number of iterations to run EM (default=5)")
+optparser.add_option("-i", "--iterations", dest="iterations", default=7, type="int", help="Number of iterations to run EM (default=6)")
 optparser.add_option("-n", "--num_sentences", dest="num_sents", default=sys.maxint, type="int", help="Number of sentences to use for training and alignment")
 (opts, _) = optparser.parse_args()
 
@@ -111,8 +111,8 @@ sys.stderr.write("Training...\n")
 forward = [[sentence.strip().split() for sentence in pair.split(' ||| ')] for pair in open(opts.bitext)][:opts.num_sents]
 reverse = [[t[1], t[0]] for t in forward]
 
-forward_align = align(forward, opts.iterations)
-reverse_align = align(reverse, opts.iterations)
+forward_align = model(forward, opts.iterations)
+reverse_align = model(reverse, opts.iterations)
 
 alignments = []
 for n in range(len(forward_align)):
@@ -134,6 +134,9 @@ for n in range(len(forward_align)):
             for (x, y) in neighbors:
                 if (x, y) in union and not y in intersection:
                     alignments[n].append((x, y))
+
+    if not (len(reverse_align[n]) - 1, len(forward_align[n]) - 1) in alignments[n]:
+        alignments[n].append((len(reverse_align[n]) - 1, len(forward_align[n]) - 1))
 
 for i in range(len(alignments)):
     for (j, k) in alignments[i]:
