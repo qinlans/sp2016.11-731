@@ -1,7 +1,27 @@
 #!/usr/bin/env python
+import math
 import optparse
 import sys
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
+
+EQ_PROB = .85
+NULL_PROB = .075
+LAMBDA = 4.0
+
+def h(i, j, m, n):
+    return -abs(float(i)/m - float(j)/n)
+
+def find_neighbors(x, y, x_upper, y_upper):
+    neighbors = []
+    for i in range(-1, 2):
+        if x + i < 0 or x + i >= x_upper:
+            continue
+        for j in range(-1, 2):
+            if y + j < 0 or y + j > y_upper or (i == 0 and j == 0):
+                continue
+            neighbors.append((x + i, y + j))
+
+    return neighbors
 
 def align(bitext, iterations):
   # Initialize uniform translation probabilities
@@ -24,6 +44,8 @@ def align(bitext, iterations):
       count = defaultdict(float)
       exp_norm = defaultdict(float)
       prob_norm = defaultdict(float)
+      align = defaultdict(float)
+      align_norm = defaultdict(float)
 
       for (n, (g, e)) in enumerate(bitext):
           # Normalization for expectations
@@ -32,12 +54,32 @@ def align(bitext, iterations):
               for i in range(len(g)):
                   exp_norm[e[j]] += prob[e[j], g[i]]
 
+          # Normalization for alignment probabilities
           for j in range(len(e)):
+              align_norm[e[j]] = 0
               for i in range(len(g)):
+                  align[e[j], g[i]] = math.exp(LAMBDA * h(j, i, len(e), len(g)))
+                  align_norm[e[j]] += math.exp(LAMBDA * h(j, i, len(e), len(g)))
+
+          for j in range(len(e)):
+              r = math.exp(-LAMBDA/len(g))
+              for i in range(len(g)):
+                  # Alignment probabilities based on proximity to diagonal
+                  if i == 0:
+                      align_prob = NULL_PROB
+                  else:
+                      align_prob = (1 - NULL_PROB) * align[e[j], g[i]]/align_norm[e[j]]
+
+                  # Alignment with equal strings
+                  if e[j] == g[i]:
+                      eq_align_prob = EQ_PROB
+                  else:
+                      eq_align_prob = 1 - EQ_PROB
+
                   # Expected number of times g word was aligned to e word
-                  count[e[j], g[i]] += prob[e[j], g[i]]/exp_norm[e[j]]
+                  count[e[j], g[i]] += eq_align_prob * align_prob * prob[e[j], g[i]]/exp_norm[e[j]]
                   # Expected number of times g word was used as a translation source
-                  prob_norm[g[i]] += prob[e[j], g[i]]/exp_norm[e[j]]
+                  prob_norm[g[i]] += eq_align_prob * align_prob * prob[e[j], g[i]]/exp_norm[e[j]]
 
       for (n, (g, e)) in enumerate(bitext):
           for i in range(len(g)):
@@ -46,7 +88,7 @@ def align(bitext, iterations):
 
   alignments = []
   for (n, (g, e)) in enumerate(bitext):
-      alignments.append([])
+      alignments.append(OrderedDict())
       for j in range(len(e)):
           max_prob = 0
           max_index = 0
@@ -55,7 +97,7 @@ def align(bitext, iterations):
                   max_prob = prob[e[j], g[i]]
                   max_index = i
 
-          alignments[n].append((max_index, j))
+          alignments[n][(max_index, j)] = max_prob
   return alignments
     
 
@@ -74,10 +116,24 @@ reverse_align = align(reverse, opts.iterations)
 
 alignments = []
 for n in range(len(forward_align)):
+    forward_set = set(forward_align[n].keys())
+    reverse_set = set((t[1], t[0]) for t in reverse_align[n].keys())
+    intersection = dict((t[1], t[0]) for t in list(forward_set.intersection(reverse_set)))
+    union = forward_set.union(reverse_set)
+
     alignments.append([])
-    for (i, j) in forward_align[n]:
-        if (j, i) in reverse_align[n]:
-            alignments[n].append((i, j))
+
+    for i in range(len(forward_align[n])):
+        if i in intersection:
+            # Symmetrize
+            alignments[n].append((intersection[i], i))
+            
+            # Diagonal grow
+            neighbors = find_neighbors(intersection[i], i,
+                len(reverse_align[n]), len(forward_align[n]))
+            for (x, y) in neighbors:
+                if (x, y) in union and not y in intersection:
+                    alignments[n].append((x, y))
 
 for i in range(len(alignments)):
     for (j, k) in alignments[i]:
