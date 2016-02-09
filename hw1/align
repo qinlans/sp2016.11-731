@@ -71,7 +71,7 @@ def align(bitext, iterations):
                       align_prob = (1 - NULL_PROB) * align[e[j], g[i]]/align_norm[e[j]]
 
                   # Alignment with equal strings
-                  if e[j] == g[i]:
+                  if e[j].lower() == g[i].lower():
                       eq_align_prob = EQ_PROB
                   else:
                       eq_align_prob = 1 - EQ_PROB
