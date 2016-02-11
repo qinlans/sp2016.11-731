@@ -46,18 +46,17 @@ def model(bitext, iterations):
       prob_norm = defaultdict(float)
       align = defaultdict(float)
       align_norm = defaultdict(float)
+      dict_align = defaultdict(float)
+      dict_norm = defaultdict(float)
 
       for (n, (g, e)) in enumerate(bitext):
-          # Normalization for expectations
+          # Normalization for expectations and alignment probabilities
           for j in range(len(e)):
               exp_norm[e[j]] = 0
+              align_norm[e[j]] = 0
+              dict_norm[e[j]] = 0
               for i in range(len(g)):
                   exp_norm[e[j]] += prob[e[j], g[i]]
-
-          # Normalization for alignment probabilities
-          for j in range(len(e)):
-              align_norm[e[j]] = 0
-              for i in range(len(g)):
                   align[e[j], g[i]] = math.exp(LAMBDA * h(j, i, len(e), len(g)))
                   align_norm[e[j]] += math.exp(LAMBDA * h(j, i, len(e), len(g)))
 
@@ -100,45 +99,71 @@ def model(bitext, iterations):
           alignments[n][(max_index, j)] = max_prob
   return alignments
     
+def main():
+    optparser = optparse.OptionParser()
+    optparser.add_option("-b", "--bitext", dest="bitext",
+        default="data/dev-test-train.de-en",
+        help="Parallel corpus (default data/dev-test-train.de-en)")
+    optparser.add_option("-a", "--alignments", dest="alignment",
+        default="data/dev.align",
+        help="Gold alignments filename (default=data/dev.align)")
+    optparser.add_option("-t", "--training", dest="training",
+        default="data/dev-test-train.de-en",
+        help="Training parallel corpus (default data/dev-test/train.de-en)")
+    optparser.add_option("-i", "--iterations", dest="iterations", default=7,
+        type="int", help="Number of iterations to run EM (default=6)")
+    optparser.add_option("-n", "--num_sentences", dest="num_sents",
+        default=sys.maxint, type="int",
+        help="Number of sentences to use for training and alignment")
+    (opts, _) = optparser.parse_args()
 
-optparser = optparse.OptionParser()
-optparser.add_option("-b", "--bitext", dest="bitext", default="data/dev-test-train.de-en", help="Parallel corpus (default data/dev-test-train.de-en)")
-optparser.add_option("-i", "--iterations", dest="iterations", default=7, type="int", help="Number of iterations to run EM (default=6)")
-optparser.add_option("-n", "--num_sentences", dest="num_sents", default=sys.maxint, type="int", help="Number of sentences to use for training and alignment")
-(opts, _) = optparser.parse_args()
+    sys.stderr.write("Training...\n")
 
-sys.stderr.write("Training...\n")
-forward = [[sentence.strip().split() for sentence in pair.split(' ||| ')] for pair in open(opts.bitext)][:opts.num_sents]
-reverse = [[t[1], t[0]] for t in forward]
+    forward = [[sentence.strip().split() for sentence in pair.split(' ||| ')] for pair in open(opts.bitext)][:opts.num_sents]
+    reverse = [[t[1], t[0]] for t in forward]
 
-forward_align = model(forward, opts.iterations)
-reverse_align = model(reverse, opts.iterations)
+    forward_align = model(forward, opts.iterations)
+    reverse_align = model(reverse, opts.iterations)
 
-alignments = []
-for n in range(len(forward_align)):
-    forward_set = set(forward_align[n].keys())
-    reverse_set = set((t[1], t[0]) for t in reverse_align[n].keys())
-    intersection = dict((t[1], t[0]) for t in list(forward_set.intersection(reverse_set)))
-    union = forward_set.union(reverse_set)
+    alignments = []
+    for n in range(len(forward_align)):
+        forward_set = set(forward_align[n].keys())
+        reverse_set = set((t[1], t[0]) for t in reverse_align[n].keys())
+        intersection = dict((t[1], t[0]) for t in list(forward_set.intersection(reverse_set)))
+        union = forward_set.union(reverse_set)
 
-    alignments.append([])
+        alignments.append([])
 
-    for i in range(len(forward_align[n])):
-        if i in intersection:
-            # Symmetrize
-            alignments[n].append((intersection[i], i))
-            
-            # Diagonal grow
-            neighbors = find_neighbors(intersection[i], i,
-                len(reverse_align[n]), len(forward_align[n]))
-            for (x, y) in neighbors:
-                if (x, y) in union and not y in intersection:
-                    alignments[n].append((x, y))
+        prev = -1
+        for i in range(len(forward_align[n])):
+            if i in intersection:
+                # Symmetrize
+                alignments[n].append((intersection[i], i))
 
-    if not (len(reverse_align[n]) - 1, len(forward_align[n]) - 1) in alignments[n]:
-        alignments[n].append((len(reverse_align[n]) - 1, len(forward_align[n]) - 1))
+                # Diagonal grow-1
+                if prev >= 0:
+                    y_delta = i - prev
+                    x_delta = intersection[i] - intersection[prev]
+                    if x_delta == y_delta and x_delta > 1:
+                        for j in range(1, x_delta):
+                            alignments[n].append((intersection[prev] + j, prev + j))
+                prev = i
 
-for i in range(len(alignments)):
-    for (j, k) in alignments[i]:
-        sys.stdout.write("%i-%i " % (j, k))
-    sys.stdout.write("\n")
+                # Diagonal grow-2
+                neighbors = find_neighbors(intersection[i], i,
+                    len(reverse_align[n]), len(forward_align[n]))
+                for (x, y) in neighbors:
+                    if (x, y) in union and not y in intersection:
+                        alignments[n].append((x, y))
+
+        alignments[n] = sorted(list(set(alignments[n])))
+
+        if not (len(reverse_align[n]) - 1, len(forward_align[n]) - 1) in alignments[n]:
+            alignments[n].append((len(reverse_align[n]) - 1, len(forward_align[n]) - 1))
+
+    for i in range(len(alignments)):
+        for (j, k) in alignments[i]:
+            sys.stdout.write("%i-%i " % (j, k))
+        sys.stdout.write("\n")
+
+if __name__ == "__main__": main()
