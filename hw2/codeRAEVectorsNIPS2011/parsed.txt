@@ -1,0 +1,14 @@
+Sentence skipped: no PCFG fallback.
+SENTENCE_SKIPPED_OR_UNPARSABLE
+Sentence skipped: no PCFG fallback.
+SENTENCE_SKIPPED_OR_UNPARSABLE
+Sentence skipped: no PCFG fallback.
+SENTENCE_SKIPPED_OR_UNPARSABLE
+Sentence skipped: no PCFG fallback.
+SENTENCE_SKIPPED_OR_UNPARSABLE
+Sentence skipped: no PCFG fallback.
+SENTENCE_SKIPPED_OR_UNPARSABLE
+Sentence skipped: no PCFG fallback.
+SENTENCE_SKIPPED_OR_UNPARSABLE
+Sentence skipped: no PCFG fallback.
+SENTENCE_SKIPPED_OR_UNPARSABLE
