@@ -21,6 +21,7 @@ using namespace std;
 using namespace cnn;
 
 class Sentence {
+  public:
     Expression syn;
     Expression sem;
     float BLEU;
@@ -28,8 +29,13 @@ class Sentence {
 };
 
 class Instance {
+  public:
     Sentence hyp1;
     Sentence hyp2;
     Sentence ref;
     int correct;
 };
+
+int main(int argc, char** argv) {
+  cnn::Initialize(argc, argv);
+}
