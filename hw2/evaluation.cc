@@ -314,6 +314,7 @@ Expression buildComputationGraph(Instance instance,
   Expression b = parameter(cg, m->add_parameters({1}));
 
   // Create embedding from syntax and semantic vector
+  // {SENTENCE_DIM, 1} result
   Expression hyp1syn = input(cg, {SENTENCE_DIM, 1}, instance.hyp1.syn);
   Expression hyp2syn = input(cg, {SENTENCE_DIM, 1}, instance.hyp2.syn);
   Expression refsyn = input(cg, {SENTENCE_DIM, 1}, instance.ref.syn);
@@ -322,32 +323,42 @@ Expression buildComputationGraph(Instance instance,
   vector<Expression> hyp2sem_vectors;
   vector<Expression> refsem_vectors;
   for (int i = 0; i < instance.hyp1.sem.size(); ++i) {
-    hyp1sem_vectors.push_back(input(cg, {GLOVE_DIM, 1}, instance.hyp1.sem[i]));
+    if (instance.hyp1.sem[i].size() != 0) {
+      hyp1sem_vectors.push_back(input(cg, {GLOVE_DIM, 1}, instance.hyp1.sem[i]));
+    }
   }
   for (int i = 0; i < instance.hyp2.sem.size(); ++i) {
-    hyp2sem_vectors.push_back(input(cg, {GLOVE_DIM, 1}, instance.hyp2.sem[i]));
+    if (instance.hyp2.sem[i].size() != 0) {
+      hyp2sem_vectors.push_back(input(cg, {GLOVE_DIM, 1}, instance.hyp2.sem[i]));
+    }
   }
   for (int i = 0; i < instance.ref.sem.size(); ++i) {
-    refsem_vectors.push_back(input(cg, {GLOVE_DIM, 1}, instance.ref.sem[i])); 
+    if (instance.ref.sem[i].size() != 0) {
+      refsem_vectors.push_back(input(cg, {GLOVE_DIM, 1}, instance.ref.sem[i]));
+    }
   }
   Expression hyp1sem_matrix = concatenate_cols(hyp1sem_vectors);
   Expression hyp2sem_matrix = concatenate_cols(hyp2sem_vectors);
   Expression refsem_matrix = concatenate_cols(refsem_vectors);
 
+  // {GLOVE_DIM * GLOVE_DIM, 1} result
   Expression hyp1sem = reshape(hyp1sem_matrix * transpose(hyp1sem_matrix), {GLOVE_DIM * GLOVE_DIM, 1});
   Expression hyp2sem = reshape(hyp2sem_matrix * transpose(hyp2sem_matrix), {GLOVE_DIM * GLOVE_DIM, 1});
   Expression refsem = reshape(refsem_matrix * transpose(refsem_matrix), {GLOVE_DIM * GLOVE_DIM, 1});
 
+  // {HIDDEN_DIM, 1} result
   Expression x1 = input_embed * concatenate({hyp1syn, hyp1sem});
   Expression x2 = input_embed * concatenate({hyp2syn, hyp2sem});
   Expression xref = input_embed * concatenate({refsyn, refsem});
 
-  // Pairwise vectors
+  // Create pairwise vectors
+  // {PAIRWISE_DIM, 1} result
   Expression h12 = tanh(W12 * concatenate({x1, x2}) + b12);
   Expression h1r = tanh(W1r * concatenate({x1, xref}) + b1r);
   Expression h2r = tanh(W2r * concatenate({x2, xref}) + b2r);
 
   // Combination of evaluation input
+  // {PAIRWISE_DIM * 3 + 4, 1} result
   Expression BLEU1 = input(cg, instance.hyp1.BLEU);
   Expression BLEU2 = input(cg, instance.hyp2.BLEU);
   Expression meteor1 = input(cg, instance.hyp1.meteor);
