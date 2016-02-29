@@ -327,8 +327,8 @@ struct EvaluationGraph {
     b_1r(m->add_parameters({PAIRWISE_DIM})),
     W_2r(m->add_parameters({PAIRWISE_DIM, HIDDEN_DIM * 2})),
     b_2r(m->add_parameters({PAIRWISE_DIM})),
-    V_(m->add_parameters({2, PAIRWISE_DIM * 3 + 4})),
-    b_(m->add_parameters({2}))
+    V_(m->add_parameters({1, PAIRWISE_DIM * 2 + 2})),
+    b_(m->add_parameters({1}))
     {
 
     }
@@ -405,10 +405,9 @@ struct EvaluationGraph {
     Expression BLEU2 = input(cg, instance.hyp2.BLEU);
     Expression meteor1 = input(cg, instance.hyp1.meteor);
     Expression meteor2 = input(cg, instance.hyp2.meteor);
-    Expression combined = concatenate({h12, h1r, h2r, BLEU1, BLEU2,
-        meteor1, meteor2});
-
-    Expression u = V * combined + b;
+    Expression hyp1 = concatenate({h1r, h12, BLEU1, meteor1});
+    Expression hyp2 = concatenate({h2r, h12, BLEU2, meteor2});
+    Expression u = concatenate({V * hyp1 + b, V * hyp2 + b });
 
     return u;
   }
@@ -514,10 +513,10 @@ int main(int argc, char** argv) {
       ++lines;
     }
 
-    sgd->status();
-    cerr << " E = " << (loss / num_instances)
-         << " ppl = " << exp(loss / num_instances) 
-         << " accuracy = " << (float(num_correct) / num_instances) << "\n";
+    //sgd->status();
+    //cerr << " E = " << (loss / num_instances)
+    //     << " ppl = " << exp(loss / num_instances) 
+    //     << " accuracy = " << (float(num_correct) / num_instances) << "\n";
     report++;
 
     if (report % dev_every_i_reports == 0) {
