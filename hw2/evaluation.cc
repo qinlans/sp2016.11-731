@@ -23,11 +23,11 @@ using namespace cnn;
 
 unsigned GLOVE_DIM = 50;
 unsigned SENTENCE_DIM = 100;
-unsigned INPUT_DIM = GLOVE_DIM * GLOVE_DIM + SENTENCE_DIM;
+unsigned SEM_DIM = 100;
+unsigned INPUT_DIM = SEM_DIM + SENTENCE_DIM;
 unsigned HIDDEN_DIM = 50;
 unsigned PAIRWISE_DIM = 10;
 unsigned OUTPUT_DIM = 1;
-
 
 class Sentence {
   public:
@@ -303,7 +303,10 @@ vector<Instance> setSyn(string shyp1, string shyp2, string sref, vector<Instance
 }
 
 struct EvaluationGraph {
+  Parameters* se;
+  Parameters* se_b;
   Parameters* ie;
+  Parameters* ie_b;
   Parameters* W_12;
   Parameters* b_12;
   Parameters* W_1r;
@@ -314,7 +317,10 @@ struct EvaluationGraph {
   Parameters* b_;
 
   explicit EvaluationGraph(Model* m) :
+    se(m->add_parameters({SEM_DIM, GLOVE_DIM * GLOVE_DIM})),
+    se_b(m->add_parameters({SEM_DIM})),
     ie(m->add_parameters({HIDDEN_DIM, INPUT_DIM})),
+    ie_b(m->add_parameters({HIDDEN_DIM})),
     W_12(m->add_parameters({PAIRWISE_DIM, HIDDEN_DIM * 2})),
     b_12(m->add_parameters({PAIRWISE_DIM})),
     W_1r(m->add_parameters({PAIRWISE_DIM, HIDDEN_DIM * 2})),
@@ -330,8 +336,10 @@ struct EvaluationGraph {
 
   Expression buildComputationGraph(Instance instance,
    ComputationGraph& cg, Model* m) {
-    
+    Expression sem_embed = parameter(cg, se);
+    Expression sem_bias = parameter(cg, se_b);
     Expression input_embed = parameter(cg, ie);
+    Expression input_bias = parameter(cg, ie_b);
     Expression W12 = parameter(cg, W_12);
     Expression b12 = parameter(cg, b_12);
     Expression W1r = parameter(cg, W_1r);
@@ -352,27 +360,33 @@ struct EvaluationGraph {
     vector<Expression> refsem_vectors;
     for (int i = 0; i < instance.hyp1.sem.size(); ++i) {
       if (instance.hyp1.sem[i].size() != 0) {
-        hyp1sem_vectors.push_back(input(cg, {GLOVE_DIM, 1}, instance.hyp1.sem[i]));
+        hyp1sem_vectors.push_back(input(cg, {GLOVE_DIM, 1},
+            instance.hyp1.sem[i]));
       }
     }
     for (int i = 0; i < instance.hyp2.sem.size(); ++i) {
       if (instance.hyp2.sem[i].size() != 0) {
-        hyp2sem_vectors.push_back(input(cg, {GLOVE_DIM, 1}, instance.hyp2.sem[i]));
+        hyp2sem_vectors.push_back(input(cg, {GLOVE_DIM, 1},
+            instance.hyp2.sem[i]));
       }
     }
     for (int i = 0; i < instance.ref.sem.size(); ++i) {
       if (instance.ref.sem[i].size() != 0) {
-        refsem_vectors.push_back(input(cg, {GLOVE_DIM, 1}, instance.ref.sem[i]));
+        refsem_vectors.push_back(input(cg, {GLOVE_DIM, 1},
+            instance.ref.sem[i]));
       }
     }
     Expression hyp1sem_matrix = concatenate_cols(hyp1sem_vectors);
     Expression hyp2sem_matrix = concatenate_cols(hyp2sem_vectors);
     Expression refsem_matrix = concatenate_cols(refsem_vectors);
 
-    // {GLOVE_DIM * GLOVE_DIM, 1} result
-    Expression hyp1sem = reshape(hyp1sem_matrix * transpose(hyp1sem_matrix), {GLOVE_DIM * GLOVE_DIM, 1});
-    Expression hyp2sem = reshape(hyp2sem_matrix * transpose(hyp2sem_matrix), {GLOVE_DIM * GLOVE_DIM, 1});
-    Expression refsem = reshape(refsem_matrix * transpose(refsem_matrix), {GLOVE_DIM * GLOVE_DIM, 1});
+    // {SEM_DIM, 1} result
+    Expression hyp1sem = tanh(sem_embed * reshape(hyp1sem_matrix *
+        transpose(hyp1sem_matrix), {GLOVE_DIM * GLOVE_DIM, 1}));
+    Expression hyp2sem = tanh(sem_embed * reshape(hyp2sem_matrix *
+        transpose(hyp2sem_matrix), {GLOVE_DIM * GLOVE_DIM, 1}));
+    Expression refsem = tanh(sem_embed * reshape(refsem_matrix *
+        transpose(refsem_matrix), {GLOVE_DIM * GLOVE_DIM, 1}));
 
     // {HIDDEN_DIM, 1} result
     Expression x1 = tanh(input_embed * concatenate({hyp1syn, hyp1sem}));
@@ -391,7 +405,8 @@ struct EvaluationGraph {
     Expression BLEU2 = input(cg, instance.hyp2.BLEU);
     Expression meteor1 = input(cg, instance.hyp1.meteor);
     Expression meteor2 = input(cg, instance.hyp2.meteor);
-    Expression combined = concatenate({h12, h1r, h2r, BLEU1, BLEU2, meteor1, meteor2});
+    Expression combined = concatenate({h12, h1r, h2r, BLEU1, BLEU2,
+        meteor1, meteor2});
 
     Expression u = V * combined + b;
 
@@ -433,7 +448,8 @@ int main(int argc, char** argv) {
   sgd = new SimpleSGDTrainer(&model);
   EvaluationGraph evaluator(&model);
 
-  unordered_map<string, vector<float>> word2gl = getAllWords(hyp1, hyp2, ref, gloveFile);
+  unordered_map<string, vector<float>> word2gl =
+      getAllWords(hyp1, hyp2, ref, gloveFile);
   vector<Instance> instances = setVector(hyp1, hyp2, ref, word2gl);
   instances = setBMC(bleu, meteor, correct, instances);
   instances = setSyn(shyp1, shyp2, sref, instances);
@@ -473,7 +489,8 @@ int main(int argc, char** argv) {
       Instance training_instance = instances[order[training_order[si]]];
       ++si;
 
-      Expression u = evaluator.buildComputationGraph(training_instance, cg, &model);   
+      Expression u = evaluator.buildComputationGraph(training_instance, cg,
+          &model);   
       vector<float> hyp_probs = as_vector(cg.incremental_forward());
       
       int pred = 0;
@@ -510,7 +527,8 @@ int main(int argc, char** argv) {
       for (int i = 0; i < dev.size(); ++i) {
         ComputationGraph dcg;
         Instance dev_instance = instances[dev[i]];
-        Expression du = evaluator.buildComputationGraph(dev_instance, dcg, &model);
+        Expression du = evaluator.buildComputationGraph(dev_instance, dcg,
+            &model);
         vector<float> dhyp_probs = as_vector(dcg.incremental_forward());
 
         int dpred = 0;
@@ -543,6 +561,7 @@ int main(int argc, char** argv) {
         boost::archive::text_oarchive oa(out);
         oa << model;
       }
+      cerr << " best accuracy = " << best << "\n";
     }
   }
 
