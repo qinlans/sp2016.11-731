@@ -24,8 +24,8 @@ using namespace cnn;
 unsigned GLOVE_DIM = 50;
 unsigned SENTENCE_DIM = 100;
 unsigned INPUT_DIM = GLOVE_DIM * GLOVE_DIM + SENTENCE_DIM;
-unsigned HIDDEN_DIM = 45;
-unsigned PAIRWISE_DIM = 100;
+unsigned HIDDEN_DIM = 50;
+unsigned PAIRWISE_DIM = 10;
 unsigned OUTPUT_DIM = 1;
 
 
@@ -321,8 +321,8 @@ struct EvaluationGraph {
     b_1r(m->add_parameters({PAIRWISE_DIM})),
     W_2r(m->add_parameters({PAIRWISE_DIM, HIDDEN_DIM * 2})),
     b_2r(m->add_parameters({PAIRWISE_DIM})),
-    V_(m->add_parameters({1, PAIRWISE_DIM * 3 + 4})),
-    b_(m->add_parameters({1}))
+    V_(m->add_parameters({2, PAIRWISE_DIM * 3 + 4})),
+    b_(m->add_parameters({2}))
     {
 
     }
@@ -393,16 +393,16 @@ struct EvaluationGraph {
     Expression meteor2 = input(cg, instance.hyp2.meteor);
     Expression combined = concatenate({h12, h1r, h2r, BLEU1, BLEU2, meteor1, meteor2});
 
-    Expression y_pred = V * combined + b;
+    Expression u = V * combined + b;
 
-    return y_pred;
+    return u;
   }
 
 
 };
 
 int main(int argc, char** argv) {
-  cnn::Initialize(argc, argv, 585502743);
+  cnn::Initialize(argc, argv);
   string hyp1 = "../data/hyp1lower.txt";
   string hyp2 = "../data/hyp2lower.txt";
   string ref = "../data/reflower.txt";
@@ -456,7 +456,7 @@ int main(int argc, char** argv) {
   unsigned dev_every_i_reports = 20;
   unsigned lines = 0;
   unsigned si = training_order.size();
-  double best = 9e+99;
+  double best = 0;
   while(1) {
     double loss = 0;
     unsigned num_instances = 0;
@@ -473,19 +473,23 @@ int main(int argc, char** argv) {
       Instance training_instance = instances[order[training_order[si]]];
       ++si;
 
-      Expression y_pred = evaluator.buildComputationGraph(training_instance, cg, &model);   
-      Expression y = input(cg, training_instance.correct);
-      Expression loss_exp = squared_distance(y_pred, y);
-   
-      int correct_hyp = training_instance.correct;
+      Expression u = evaluator.buildComputationGraph(training_instance, cg, &model);   
+      vector<float> hyp_probs = as_vector(cg.incremental_forward());
+      
       int pred = 0;
-      if (as_scalar(y_pred.value()) > 0) { pred = 1; }
-      else if (as_scalar(y_pred.value()) < 0) { pred = -1; }
-
+      if (hyp_probs[0] > hyp_probs[1]) { pred = -1; }
+      else { pred = 1; }
+  
+      int correct_hyp = training_instance.correct;
       if (correct_hyp == pred) {
         ++num_correct;
       }
 
+      int update_pred = 0;
+      if (correct_hyp == -1) { update_pred = 0; }
+      else { update_pred = 1; }
+
+      Expression loss_exp = pickneglogsoftmax(u, update_pred);
       loss += as_scalar(cg.incremental_forward());
       cg.backward();
       sgd->update();
@@ -506,19 +510,23 @@ int main(int argc, char** argv) {
       for (int i = 0; i < dev.size(); ++i) {
         ComputationGraph dcg;
         Instance dev_instance = instances[dev[i]];
-        Expression dev_y_pred = evaluator.buildComputationGraph(dev_instance, dcg, &model);
-        Expression y = input(dcg, dev_instance.correct);
-        Expression dloss_exp = squared_distance(dev_y_pred, y);
+        Expression du = evaluator.buildComputationGraph(dev_instance, dcg, &model);
+        vector<float> dhyp_probs = as_vector(dcg.incremental_forward());
 
-        int correct_hyp = dev_instance.correct;
-        int pred = 0;
-        if (as_scalar(dev_y_pred.value()) > 0) { pred = 1; }
-        else if (as_scalar(dev_y_pred.value()) < 0) { pred = -1; }
+        int dpred = 0;
+        if (dhyp_probs[0] > dhyp_probs[1]) { dpred = -1; }
+        else { dpred = 1; }
 
-        if (correct_hyp == pred) {
+        int dcorrect_hyp = dev_instance.correct;
+        if (dcorrect_hyp == dpred) {
           ++dnum_correct;
         }
 
+        int dupdate_pred = 0;
+        if (dcorrect_hyp == -1) { dupdate_pred = 0; }
+        else { dupdate_pred = 1; }
+
+        Expression dloss_exp = pickneglogsoftmax(du, dupdate_pred);
         dloss += as_scalar(dcg.incremental_forward());
         ++dnum_instances;
       }
@@ -528,8 +536,9 @@ int main(int argc, char** argv) {
            << " ppl= " << exp(dloss / dnum_instances)
            << " accuracy = " << (float(dnum_correct) / dnum_instances) << "\n";
 
-      if (dloss < best) {
-        best = dloss;
+      float daccuracy = float(dnum_correct) / dnum_instances;
+      if (daccuracy > best) {
+        best = daccuracy;
         ofstream out(smodel);
         boost::archive::text_oarchive oa(out);
         oa << model;
