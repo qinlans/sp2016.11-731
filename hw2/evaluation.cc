@@ -23,9 +23,9 @@ using namespace cnn;
 
 unsigned GLOVE_DIM = 50;
 unsigned SENTENCE_DIM = 100;
-unsigned SEM_DIM = 100;
+unsigned SEM_DIM = 50;
 unsigned INPUT_DIM = SEM_DIM + SENTENCE_DIM;
-unsigned HIDDEN_DIM = 50;
+unsigned HIDDEN_DIM = 30;
 unsigned PAIRWISE_DIM = 10;
 unsigned OUTPUT_DIM = 1;
 
@@ -317,7 +317,7 @@ struct EvaluationGraph {
   Parameters* b_;
 
   explicit EvaluationGraph(Model* m) :
-    se(m->add_parameters({SEM_DIM, GLOVE_DIM * GLOVE_DIM})),
+    se(m->add_parameters({SEM_DIM, GLOVE_DIM})),
     se_b(m->add_parameters({SEM_DIM})),
     ie(m->add_parameters({HIDDEN_DIM, INPUT_DIM})),
     ie_b(m->add_parameters({HIDDEN_DIM})),
@@ -327,7 +327,7 @@ struct EvaluationGraph {
     b_1r(m->add_parameters({PAIRWISE_DIM})),
     W_2r(m->add_parameters({PAIRWISE_DIM, HIDDEN_DIM * 2})),
     b_2r(m->add_parameters({PAIRWISE_DIM})),
-    V_(m->add_parameters({1, PAIRWISE_DIM * 2 + 2})),
+    V_(m->add_parameters({1, PAIRWISE_DIM * 2 + 6})),
     b_(m->add_parameters({1}))
     {
 
@@ -349,44 +349,51 @@ struct EvaluationGraph {
     Expression V = parameter(cg, V_);
     Expression b = parameter(cg, b_);
 
+
     // Create embedding from syntax and semantic vector
     // {SENTENCE_DIM, 1} result
     Expression hyp1syn = input(cg, {SENTENCE_DIM, 1}, instance.hyp1.syn);
     Expression hyp2syn = input(cg, {SENTENCE_DIM, 1}, instance.hyp2.syn);
     Expression refsyn = input(cg, {SENTENCE_DIM, 1}, instance.ref.syn);
 
-    vector<Expression> hyp1sem_vectors;
-    vector<Expression> hyp2sem_vectors;
-    vector<Expression> refsem_vectors;
+    int hyp1N = 0;
+    int hyp2N = 0;
+    int refN = 0;
+
+
+    Expression hyp1sem = zeroes(cg, {GLOVE_DIM, 1});
+    Expression hyp2sem = zeroes(cg, {GLOVE_DIM, 1});
+    Expression refsem  = zeroes(cg, {GLOVE_DIM, 1});
+
     for (int i = 0; i < instance.hyp1.sem.size(); ++i) {
       if (instance.hyp1.sem[i].size() != 0) {
-        hyp1sem_vectors.push_back(input(cg, {GLOVE_DIM, 1},
+        hyp1sem =  hyp1sem + (input(cg, {GLOVE_DIM, 1},
             instance.hyp1.sem[i]));
+        hyp1N++;
       }
     }
     for (int i = 0; i < instance.hyp2.sem.size(); ++i) {
       if (instance.hyp2.sem[i].size() != 0) {
-        hyp2sem_vectors.push_back(input(cg, {GLOVE_DIM, 1},
+        hyp2sem =  hyp2sem + (input(cg, {GLOVE_DIM, 1},
             instance.hyp2.sem[i]));
+        hyp2N++;
       }
     }
     for (int i = 0; i < instance.ref.sem.size(); ++i) {
       if (instance.ref.sem[i].size() != 0) {
-        refsem_vectors.push_back(input(cg, {GLOVE_DIM, 1},
+        refsem =  hyp2sem + (input(cg, {GLOVE_DIM, 1},
             instance.ref.sem[i]));
+        refN++;
       }
     }
-    Expression hyp1sem_matrix = concatenate_cols(hyp1sem_vectors);
-    Expression hyp2sem_matrix = concatenate_cols(hyp2sem_vectors);
-    Expression refsem_matrix = concatenate_cols(refsem_vectors);
+    hyp1sem = hyp1sem * (1/hyp1N);
+    hyp2sem = hyp2sem * (1/hyp2N); 
+    refsem = refsem * (1/refN); 
 
     // {SEM_DIM, 1} result
-    Expression hyp1sem = tanh(sem_embed * reshape(hyp1sem_matrix *
-        transpose(hyp1sem_matrix), {GLOVE_DIM * GLOVE_DIM, 1}));
-    Expression hyp2sem = tanh(sem_embed * reshape(hyp2sem_matrix *
-        transpose(hyp2sem_matrix), {GLOVE_DIM * GLOVE_DIM, 1}));
-    Expression refsem = tanh(sem_embed * reshape(refsem_matrix *
-        transpose(refsem_matrix), {GLOVE_DIM * GLOVE_DIM, 1}));
+    hyp1sem = tanh(sem_embed * hyp1sem);
+    hyp2sem = tanh(sem_embed * hyp2sem);
+    refsem = tanh(sem_embed * refsem);
 
     // {HIDDEN_DIM, 1} result
     Expression x1 = tanh(input_embed * concatenate({hyp1syn, hyp1sem}));
@@ -405,8 +412,8 @@ struct EvaluationGraph {
     Expression BLEU2 = input(cg, instance.hyp2.BLEU);
     Expression meteor1 = input(cg, instance.hyp1.meteor);
     Expression meteor2 = input(cg, instance.hyp2.meteor);
-    Expression hyp1 = concatenate({h1r, h12, BLEU1, meteor1});
-    Expression hyp2 = concatenate({h2r, h12, BLEU2, meteor2});
+    Expression hyp1 = concatenate({h1r, h12, BLEU1, meteor1, meteor1, meteor1, meteor1, meteor1});
+    Expression hyp2 = concatenate({h2r, h12, BLEU2, meteor2, meteor2, meteor2, meteor2, meteor2});
     Expression u = concatenate({V * hyp1 + b, V * hyp2 + b });
 
     return u;
@@ -428,25 +435,6 @@ int main(int argc, char** argv) {
   string shyp2 = "../data/hyp2vectors.txt";
   string sref = "../data/refvectors.txt";
 
-  bool load_model = false;
-  string lmodel = "in_model";
-  string smodel = "model";
-
-  Model model;
-
-  if (load_model) {
-    string fname = lmodel;
-    cerr << "Reading parameters from " << fname << "...\n";
-    ifstream in(fname);
-    assert(in);
-    boost::archive::text_iarchive ia(in);
-    ia >> model;
-  }
-
-  Trainer* sgd = nullptr;
-  sgd = new SimpleSGDTrainer(&model);
-  EvaluationGraph evaluator(&model);
-
   unordered_map<string, vector<float>> word2gl =
       getAllWords(hyp1, hyp2, ref, gloveFile);
   vector<Instance> instances = setVector(hyp1, hyp2, ref, word2gl);
@@ -454,114 +442,137 @@ int main(int argc, char** argv) {
   instances = setSyn(shyp1, shyp2, sref, instances);
 
   // Shuffles instances with gold data
-  vector<unsigned> order(26208);
-  for (int i = 0; i < order.size(); ++i) order[i] = i;
-  shuffle(order.begin(), order.end(), *rndeng);
+  vector<unsigned> order(25208);
+  for (int k = 0; k < 16; ++k) {
+    
+    bool load_model = false;
+    string lmodel = "in_model";
+    string smodel = "model";
 
-  // Picks subsets of the gold data to be training and dev sets
-  vector<unsigned> training(order.begin(), order.end() - 5000);
-  vector<unsigned> dev(order.end() - 5000, order.end());  
+    Model model;
 
-  vector<unsigned> training_order(training.size());
-  for (int i = 0; i < training_order.size(); ++i) training_order[i] = i;
-
-  bool first = true;
-  unsigned report = 0;
-  unsigned report_every_i = 20;
-  unsigned dev_every_i_reports = 20;
-  unsigned lines = 0;
-  unsigned si = training_order.size();
-  double best = 0;
-  while(1) {
-    double loss = 0;
-    unsigned num_instances = 0;
-    unsigned num_correct = 0;
-    for (int i = 0; i < report_every_i; ++i) {
-      if (si == training_order.size()) {
-        si = 0;
-        if (first) { first = false; } else { sgd->update_epoch(); }
-        // shuffle training instances
-        shuffle(training_order.begin(), training_order.end(), *rndeng);
-      }
-
-      ComputationGraph cg;
-      Instance training_instance = instances[order[training_order[si]]];
-      ++si;
-
-      Expression u = evaluator.buildComputationGraph(training_instance, cg,
-          &model);   
-      vector<float> hyp_probs = as_vector(cg.incremental_forward());
-      
-      int pred = 0;
-      if (hyp_probs[0] > hyp_probs[1]) { pred = -1; }
-      else { pred = 1; }
-  
-      int correct_hyp = training_instance.correct;
-      if (correct_hyp == pred) {
-        ++num_correct;
-      }
-
-      int update_pred = 0;
-      if (correct_hyp == -1) { update_pred = 0; }
-      else { update_pred = 1; }
-
-      Expression loss_exp = pickneglogsoftmax(u, update_pred);
-      loss += as_scalar(cg.incremental_forward());
-      cg.backward();
-      sgd->update();
-      ++num_instances;
-      ++lines;
+    if (load_model) {
+      string fname = lmodel;
+      cerr << "Reading parameters from " << fname << "...\n";
+      ifstream in(fname);
+      assert(in);
+      boost::archive::text_iarchive ia(in);
+      ia >> model;
     }
 
-    //sgd->status();
-    //cerr << " E = " << (loss / num_instances)
-    //     << " ppl = " << exp(loss / num_instances) 
-    //     << " accuracy = " << (float(num_correct) / num_instances) << "\n";
-    report++;
+    Trainer* sgd = nullptr;
+    sgd = new SimpleSGDTrainer(&model);
+    EvaluationGraph evaluator(&model);
 
-    if (report % dev_every_i_reports == 0) {
-      double dloss = 0;
-      unsigned dnum_instances = 0;
-      unsigned dnum_correct = 0;
-      for (int i = 0; i < dev.size(); ++i) {
-        ComputationGraph dcg;
-        Instance dev_instance = instances[dev[i]];
-        Expression du = evaluator.buildComputationGraph(dev_instance, dcg,
-            &model);
-        vector<float> dhyp_probs = as_vector(dcg.incremental_forward());
+    for (int i = 0; i < order.size(); ++i) order[i] = i;
+    shuffle(order.begin(), order.end(), *rndeng);
 
-        int dpred = 0;
-        if (dhyp_probs[0] > dhyp_probs[1]) { dpred = -1; }
-        else { dpred = 1; }
+    // Picks subsets of the gold data to be training and dev sets
+    vector<unsigned> training(order.begin(), order.end() - 1000);
+    vector<unsigned> dev(order.end() - 1000, order.end());  
 
-        int dcorrect_hyp = dev_instance.correct;
-        if (dcorrect_hyp == dpred) {
-          ++dnum_correct;
+    vector<unsigned> training_order(training.size());
+    for (int i = 0; i < training_order.size(); ++i) training_order[i] = i;
+
+    bool first = true;
+    unsigned report = 0;
+    unsigned report_every_i = 20;
+    unsigned dev_every_i_reports = 20;
+    unsigned lines = 0;
+    unsigned si = training_order.size();
+    double best = 0;
+    int epoch_count = 0;
+    while (epoch_count < 120) {
+      double loss = 0;
+      unsigned num_instances = 0;
+      unsigned num_correct = 0;
+      for (int i = 0; i < report_every_i; ++i) {
+        if (si == training_order.size()) {
+          si = 0;
+          if (first) { first = false; } else { sgd->update_epoch(); epoch_count++;}
+          // shuffle training instances
+          shuffle(training_order.begin(), training_order.end(), *rndeng);
         }
 
-        int dupdate_pred = 0;
-        if (dcorrect_hyp == -1) { dupdate_pred = 0; }
-        else { dupdate_pred = 1; }
+        ComputationGraph cg;
+        Instance training_instance = instances[order[training_order[si]]];
+        ++si;
 
-        Expression dloss_exp = pickneglogsoftmax(du, dupdate_pred);
-        dloss += as_scalar(dcg.incremental_forward());
-        ++dnum_instances;
+        Expression u = evaluator.buildComputationGraph(training_instance, cg,
+            &model);   
+        vector<float> hyp_probs = as_vector(cg.incremental_forward());
+        
+        int pred = 0;
+        if (hyp_probs[0] > hyp_probs[1]) { pred = -1; }
+        else { pred = 1; }
+    
+        int correct_hyp = training_instance.correct;
+        if (correct_hyp == pred) {
+          ++num_correct;
+        }
+
+        int update_pred = 0;
+        if (correct_hyp == -1) { update_pred = 0; }
+        else { update_pred = 1; }
+
+        Expression loss_exp = pickneglogsoftmax(u, update_pred);
+        loss += as_scalar(cg.incremental_forward());
+        cg.backward();
+        sgd->update();
+        ++num_instances;
+        ++lines;
       }
 
-      cerr << "\n***DEV [epoch=" << (lines / (double)training.size())
-           << "] E = " << (dloss / dnum_instances)
-           << " ppl= " << exp(dloss / dnum_instances)
-           << " accuracy = " << (float(dnum_correct) / dnum_instances) << "\n";
+      //sgd->status();
+      //cerr << " E = " << (loss / num_instances)
+      //     << " ppl = " << exp(loss / num_instances) 
+      //     << " accuracy = " << (float(num_correct) / num_instances) << "\n";
+      report++;
 
-      float daccuracy = float(dnum_correct) / dnum_instances;
-      if (daccuracy > best) {
-        best = daccuracy;
-        ofstream out(smodel);
-        boost::archive::text_oarchive oa(out);
-        oa << model;
+      if (report % dev_every_i_reports == 0) {
+        double dloss = 0;
+        unsigned dnum_instances = 0;
+        unsigned dnum_correct = 0;
+        for (int i = 0; i < dev.size(); ++i) {
+          ComputationGraph dcg;
+          Instance dev_instance = instances[dev[i]];
+          Expression du = evaluator.buildComputationGraph(dev_instance, dcg,
+              &model);
+          vector<float> dhyp_probs = as_vector(dcg.incremental_forward());
+
+          int dpred = 0;
+          if (dhyp_probs[0] > dhyp_probs[1]) { dpred = -1; }
+          else { dpred = 1; }
+
+          int dcorrect_hyp = dev_instance.correct;
+          if (dcorrect_hyp == dpred) {
+            ++dnum_correct;
+          }
+
+          int dupdate_pred = 0;
+          if (dcorrect_hyp == -1) { dupdate_pred = 0; }
+          else { dupdate_pred = 1; }
+
+          Expression dloss_exp = pickneglogsoftmax(du, dupdate_pred);
+          dloss += as_scalar(dcg.incremental_forward());
+          ++dnum_instances;
+        }
+
+        cerr << "\n***DEV [epoch=" << (lines / (double)training.size())
+             << "] E = " << (dloss / dnum_instances)
+             << " ppl= " << exp(dloss / dnum_instances)
+             << " accuracy = " << (float(dnum_correct) / dnum_instances) << "\n";
+
+        float daccuracy = float(dnum_correct) / dnum_instances;
+        if (daccuracy > best) {
+          best = daccuracy;
+          ofstream out(smodel + to_string(k));
+          boost::archive::text_oarchive oa(out);
+          oa << model;
+        }
+        cerr << " best accuracy = " << best << "\n";
       }
-      cerr << " best accuracy = " << best << "\n";
     }
-  }
 
+  }
 }
