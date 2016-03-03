@@ -23,18 +23,23 @@ using namespace cnn;
 
 unsigned GLOVE_DIM = 50;
 unsigned SENTENCE_DIM = 100;
-unsigned SEM_DIM = 50;
+unsigned SEM_DIM = 100;
 unsigned INPUT_DIM = SEM_DIM + SENTENCE_DIM;
 unsigned HIDDEN_DIM = 30;
 unsigned PAIRWISE_DIM = 10;
 unsigned OUTPUT_DIM = 1;
+unsigned NUM_MODELS = 1;
+
+float DROPOUT_RATE = .5;
 
 class Sentence {
   public:
     vector<float> syn;
     vector<vector<float>> sem;
+    bool sem_empty;
     float BLEU;
     float meteor;
+    string words;
 };
 
 class Instance {
@@ -45,6 +50,13 @@ class Instance {
     int correct;
     int line;
 };
+
+bool i_in(vector<unsigned> unsinged_vec, unsigned unsinged) {
+  for (unsigned i: unsinged_vec) {
+    if (i == unsinged) return true;
+  }
+  return false;
+}
 
 
 unordered_map<string, vector<float>> getAllWords(string hyp1, string hyp2, string ref, string gloveFile){
@@ -108,10 +120,17 @@ vector<Instance> setVector(string hyp1, string hyp2, string ref, unordered_map<s
         vector<vector<float>> gloVes;
         istringstream iss(line);
         //this will add the semantic expression/vec/whatever
+        bool sem_empty = true;
+
         while(getline(iss, word, ' ')) {
           gloVes.push_back(word2gl[word]);
+          if (gloVes[gloVes.size() - 1].size() != 0) {
+            sem_empty = false;
+          }
         }
         sentence.sem = gloVes;
+        sentence.sem_empty = sem_empty;
+        sentence.words = line;
         instance.hyp1 = sentence;
         instances.push_back(instance);
       }
@@ -130,10 +149,17 @@ vector<Instance> setVector(string hyp1, string hyp2, string ref, unordered_map<s
         vector<vector<float>> gloVes;
         istringstream iss(line);
         //this will add the semantic expression/vec/whatever
+        bool sem_empty = true;
+
         while(getline(iss, word, ' ')) {
           gloVes.push_back(word2gl[word]);
+          if (gloVes[gloVes.size() - 1].size() != 0) {
+            sem_empty = false;
+          }
         }
         sentence.sem = gloVes;
+        sentence.sem_empty = sem_empty;
+        sentence.words = line;
         instances[counter].hyp2 = sentence;
         counter++;
       }
@@ -155,6 +181,7 @@ vector<Instance> setVector(string hyp1, string hyp2, string ref, unordered_map<s
           gloVes.push_back(word2gl[word]);
         }
         sentence.sem = gloVes;
+        sentence.words = line;
         instances[counter].ref = sentence;
         counter++;
       }
@@ -217,7 +244,7 @@ vector<Instance> setBMC(string bleu_file, string meteor_file, string correct, ve
         getline(iss, word, '\t');
         meteor = stof(word);
         instances[counter].ref.meteor = meteor;
-
+        instances[counter].line = counter;
         counter++;
       }
     }
@@ -234,7 +261,6 @@ vector<Instance> setBMC(string bleu_file, string meteor_file, string correct, ve
         //this will add the semantic expression/vec/whatever
         getline(iss, word, '\n');
         instances[counter].correct = stoi(word);
-        instances[counter].line = counter;
         counter++;
       }
     }
@@ -317,7 +343,7 @@ struct EvaluationGraph {
   Parameters* b_;
 
   explicit EvaluationGraph(Model* m) :
-    se(m->add_parameters({SEM_DIM, GLOVE_DIM})),
+    se(m->add_parameters({SEM_DIM, GLOVE_DIM * GLOVE_DIM})),
     se_b(m->add_parameters({SEM_DIM})),
     ie(m->add_parameters({HIDDEN_DIM, INPUT_DIM})),
     ie_b(m->add_parameters({HIDDEN_DIM})),
@@ -335,7 +361,7 @@ struct EvaluationGraph {
 
 
   Expression buildComputationGraph(Instance instance,
-   ComputationGraph& cg, Model* m) {
+   ComputationGraph& cg, Model* m, bool train) {
     Expression sem_embed = parameter(cg, se);
     Expression sem_bias = parameter(cg, se_b);
     Expression input_embed = parameter(cg, ie);
@@ -349,51 +375,44 @@ struct EvaluationGraph {
     Expression V = parameter(cg, V_);
     Expression b = parameter(cg, b_);
 
-
     // Create embedding from syntax and semantic vector
     // {SENTENCE_DIM, 1} result
     Expression hyp1syn = input(cg, {SENTENCE_DIM, 1}, instance.hyp1.syn);
     Expression hyp2syn = input(cg, {SENTENCE_DIM, 1}, instance.hyp2.syn);
     Expression refsyn = input(cg, {SENTENCE_DIM, 1}, instance.ref.syn);
 
-    int hyp1N = 0;
-    int hyp2N = 0;
-    int refN = 0;
-
-
-    Expression hyp1sem = zeroes(cg, {GLOVE_DIM, 1});
-    Expression hyp2sem = zeroes(cg, {GLOVE_DIM, 1});
-    Expression refsem  = zeroes(cg, {GLOVE_DIM, 1});
-
+    vector<Expression> hyp1sem_vectors;
+    vector<Expression> hyp2sem_vectors;
+    vector<Expression> refsem_vectors;
     for (int i = 0; i < instance.hyp1.sem.size(); ++i) {
       if (instance.hyp1.sem[i].size() != 0) {
-        hyp1sem =  hyp1sem + (input(cg, {GLOVE_DIM, 1},
+        hyp1sem_vectors.push_back(input(cg, {GLOVE_DIM, 1},
             instance.hyp1.sem[i]));
-        hyp1N++;
       }
     }
     for (int i = 0; i < instance.hyp2.sem.size(); ++i) {
       if (instance.hyp2.sem[i].size() != 0) {
-        hyp2sem =  hyp2sem + (input(cg, {GLOVE_DIM, 1},
+        hyp2sem_vectors.push_back(input(cg, {GLOVE_DIM, 1},
             instance.hyp2.sem[i]));
-        hyp2N++;
       }
     }
     for (int i = 0; i < instance.ref.sem.size(); ++i) {
       if (instance.ref.sem[i].size() != 0) {
-        refsem =  hyp2sem + (input(cg, {GLOVE_DIM, 1},
+        refsem_vectors.push_back(input(cg, {GLOVE_DIM, 1},
             instance.ref.sem[i]));
-        refN++;
       }
     }
-    hyp1sem = hyp1sem * (1/hyp1N);
-    hyp2sem = hyp2sem * (1/hyp2N); 
-    refsem = refsem * (1/refN); 
+    Expression hyp1sem_matrix = concatenate_cols(hyp1sem_vectors);
+    Expression hyp2sem_matrix = concatenate_cols(hyp2sem_vectors);
+    Expression refsem_matrix = concatenate_cols(refsem_vectors);
 
     // {SEM_DIM, 1} result
-    hyp1sem = tanh(sem_embed * hyp1sem);
-    hyp2sem = tanh(sem_embed * hyp2sem);
-    refsem = tanh(sem_embed * refsem);
+    Expression hyp1sem = tanh(sem_embed * reshape(hyp1sem_matrix *
+        transpose(hyp1sem_matrix), {GLOVE_DIM * GLOVE_DIM, 1}));
+    Expression hyp2sem = tanh(sem_embed * reshape(hyp2sem_matrix *
+        transpose(hyp2sem_matrix), {GLOVE_DIM * GLOVE_DIM, 1}));
+    Expression refsem = tanh(sem_embed * reshape(refsem_matrix *
+        transpose(refsem_matrix), {GLOVE_DIM * GLOVE_DIM, 1}));
 
     // {HIDDEN_DIM, 1} result
     Expression x1 = tanh(input_embed * concatenate({hyp1syn, hyp1sem}));
@@ -419,7 +438,6 @@ struct EvaluationGraph {
     return u;
   }
 
-
 };
 
 int main(int argc, char** argv) {
@@ -440,14 +458,27 @@ int main(int argc, char** argv) {
   vector<Instance> instances = setVector(hyp1, hyp2, ref, word2gl);
   instances = setBMC(bleu, meteor, correct, instances);
   instances = setSyn(shyp1, shyp2, sref, instances);
+  bool train = false;
+
 
   // Shuffles instances with gold data
-  vector<unsigned> order(25208);
-  for (int k = 0; k < 16; ++k) {
+  vector<unsigned> order(26208);
+  for (int i = 0; i < order.size(); ++i) order[i] = i;
+  //shuffle(order.begin(), order.end(), *rndeng);
+
+  // Picks subsets of the gold data to be training and dev sets
+  vector<unsigned> test(order.end() - 1000, order.end());
+
+
+  for (int k = 0; k < NUM_MODELS; ++k) {
+    int dev_start = rand() % 24208;
+    vector<unsigned> dev(order.begin() + dev_start, order.begin() + dev_start + 1000);  
+    vector<unsigned> training(order.begin(), order.begin() + dev_start);
+    training.insert(training.end(), order.begin() + dev_start + 1000, order.end() - 1000);
     
     bool load_model = false;
     string lmodel = "in_model";
-    string smodel = "model";
+    string smodel = "../models/model";
 
     Model model;
 
@@ -464,12 +495,6 @@ int main(int argc, char** argv) {
     sgd = new SimpleSGDTrainer(&model);
     EvaluationGraph evaluator(&model);
 
-    for (int i = 0; i < order.size(); ++i) order[i] = i;
-    shuffle(order.begin(), order.end(), *rndeng);
-
-    // Picks subsets of the gold data to be training and dev sets
-    vector<unsigned> training(order.begin(), order.end() - 1000);
-    vector<unsigned> dev(order.end() - 1000, order.end());  
 
     vector<unsigned> training_order(training.size());
     for (int i = 0; i < training_order.size(); ++i) training_order[i] = i;
@@ -482,7 +507,7 @@ int main(int argc, char** argv) {
     unsigned si = training_order.size();
     double best = 0;
     int epoch_count = 0;
-    while (epoch_count < 120) {
+    while (epoch_count < 10) {
       double loss = 0;
       unsigned num_instances = 0;
       unsigned num_correct = 0;
@@ -499,7 +524,7 @@ int main(int argc, char** argv) {
         ++si;
 
         Expression u = evaluator.buildComputationGraph(training_instance, cg,
-            &model);   
+            &model, true); 
         vector<float> hyp_probs = as_vector(cg.incremental_forward());
         
         int pred = 0;
@@ -537,7 +562,7 @@ int main(int argc, char** argv) {
           ComputationGraph dcg;
           Instance dev_instance = instances[dev[i]];
           Expression du = evaluator.buildComputationGraph(dev_instance, dcg,
-              &model);
+              &model, false);
           vector<float> dhyp_probs = as_vector(dcg.incremental_forward());
 
           int dpred = 0;
@@ -573,6 +598,74 @@ int main(int argc, char** argv) {
         cerr << " best accuracy = " << best << "\n";
       }
     }
+  }
+
+  
+  vector<int> instance_votes;
+  for (int i = 0; i < instances.size(); ++i) instance_votes.push_back(0);
+  
+  for (int model_num = 0; model_num < NUM_MODELS; ++model_num) {
+
+    Model model;
+    EvaluationGraph evaluator(&model);
+
+    string fname = "../models/model" + to_string(model_num);
+    cerr << "Reading parameters from " << fname << "...\n";
+    ifstream in(fname);
+    assert(in);
+    boost::archive::text_iarchive ia(in);
+    ia >> model;
+
+    int num_correct = 0;
+
+    for (int i = 0; i < instances.size(); ++i) {
+      Instance instance = instances[i];
+      ComputationGraph cg;
+
+      int pred = 1;
+      if (instance.hyp1.words.compare(instance.hyp2.words) == 0) {
+        pred = 0;
+      }
+      else if (instance.hyp1.sem_empty) {
+        pred = 1;
+      }
+      else if (instance.hyp2.sem_empty) {
+        pred = -1;
+      }
+      else {
+        Expression cu = evaluator.buildComputationGraph(instance, cg, &model, false);
+        vector<float> hyp_probs = as_vector(cg.incremental_forward());
+        if (hyp_probs[0] > hyp_probs[1]) pred = -1;
+      }
+
+      instance_votes[i] += pred;
+      if (i_in(test, i)) {
+        if (instance.correct == pred) {
+          ++num_correct;
+        }
+      }
+    }
+    cerr << "Model " + to_string(model_num) << " = " << float(num_correct)/1000 << "\n";
 
   }
+
+  int num_correct = 0;
+
+
+  for (int i = 0; i < instances.size(); ++i) {
+    Instance instance = instances[i];
+
+    int pred = 1;
+    if (instance_votes[i] < 0) pred = -1;
+    cout << pred << "\n";
+
+    if (i_in(test, i)) {
+      if (instance.correct == pred) {
+        ++num_correct;
+      }
+    }
+  }
+  cerr << "Total ensemble accuracy" << "=" << float(num_correct)/1000 << "\n";
+  
+
 }
