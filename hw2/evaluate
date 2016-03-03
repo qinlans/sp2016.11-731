@@ -1,13 +1,23 @@
 #!/usr/bin/env python
 import argparse # optparse is deprecated
 from itertools import islice # slicing for iterators
- 
+from scipy import spatial
+
 # DRY
 def word_matches(h, ref):
     return sum(1 for w in h if w in ref)
     # or sum(w in ref for w in f) # cast bool -> int
     # or sum(map(ref.__contains__, h)) # ugly!
- 
+
+def glove_fits(h, ref, gloves):
+    cos_dis = 0
+    n = 0
+    for hw in h:
+        for rw in ref:
+            if hw in gloves and rw in gloves:
+                cos_dis += spatial.distance.cosine(gloves[hw], gloves[rw])
+    return cos_dis
+
 def main():
     parser = argparse.ArgumentParser(description='Evaluate translation hypotheses.')
     # PEP8: use ' and not " for strings
@@ -15,6 +25,8 @@ def main():
             help='input file (default data/train-test.hyp1-hyp2-ref)')
     parser.add_argument('-n', '--num_sentences', default=None, type=int,
             help='Number of hypothesis pairs to evaluate')
+    parser.add_argument('-g', '--GloVe', default='data/glove.6B.50d.txt', type=int,
+            help='GloVe vectors')
     # note that if x == [1, 2, 3], then x[:None] == x[:] == x (copy); no need for sys.maxint
     opts = parser.parse_args()
  
@@ -23,16 +35,45 @@ def main():
         with open(opts.input) as f:
             for pair in f:
                 yield [sentence.strip().split() for sentence in pair.split(' ||| ')]
- 
+    words = {}
+    for h1, h2, ref in islice(sentences(), opts.num_sentences):
+        for word in h1:
+            words[word] = 1
+        for word in h2:
+            words[word] = 1
+        for word in ref:
+            words[word] = 1
+
+    word_dict = {}
+    with open(opts.GloVe) as f:
+        for line in f:
+            lines = line.split()
+            word = lines[0]
+            if word in words:
+                word_dict[word] = map(float, lines[1:])
+
+
     # note: the -n option does not work in the original code
     for h1, h2, ref in islice(sentences(), opts.num_sentences):
         rset = set(ref)
         h1_match = word_matches(h1, rset)
         h2_match = word_matches(h2, rset)
-        print(-1 if h1_match > h2_match else # \begin{cases}
-                (0 if h1_match == h2_match
-                    else 1)) # \end{cases}
- 
+        h1_prec = float(h1_match)/len(h1)
+        h1_rec = float(h1_match)/len(ref)
+        if (h1_prec + 5* h1_rec) != 0:
+            h1_met = 6*h1_prec*h1_rec/(h1_prec + 5* h1_rec) 
+        else:
+            h1_met = 0
+        h2_prec = float(h2_match)/len(h2)
+        h2_rec = float(h2_match)/len(ref)
+        if (h2_prec + 5* h2_rec) != 0:
+            h2_met = 6*h2_prec*h2_rec/(h2_prec + 5* h2_rec) 
+        else:
+            h2_met = 0
+        if h1_met > h2_met:
+            print -1
+        else:
+            print 1
 # convention to allow import of this file as a module
 if __name__ == '__main__':
     main()
