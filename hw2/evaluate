@@ -1,12 +1,16 @@
 #!/usr/bin/env python
 import argparse # optparse is deprecated
 import math
+import nltk
 import numpy as np
 import sys
 from collections import namedtuple
 from itertools import islice # slicing for iterators
 from scipy import spatial
 from sklearn import linear_model
+
+brown_tagged_sents = nltk.corpus.brown.tagged_sents(categories='news')
+unigram_tagger = nltk.UnigramTagger(brown_tagged_sents)
 
 ngram_stats = namedtuple("ngram_stats", "logprob, backoff")
 class LM:
@@ -125,6 +129,13 @@ def extract_features(h1, h2, ref, word_dict, glove_sim, h1_vec, h2_vec,
     h1_sim = spatial.distance.cosine(h1_vec, ref_vec)
     h2_sim = spatial.distance.cosine(h2_vec, ref_vec)
 
+    h1_tags = [x[1] for x in unigram_tagger.tag(h1)]
+    h2_tags = [x[1] for x in unigram_tagger.tag(h2)]
+    ref_tags = [x[1] for x in unigram_tagger.tag(ref)]
+
+    h1_tag_met = meteor(h1_tags, ref_tags)
+    h2_tag_met = meteor(h2_tags, ref_tags)
+
     h1_sentence = ' '.join(h1)
     h2_sentence = ' '.join(h2)
     ref_sentence = ' '.join(ref)
@@ -133,7 +144,7 @@ def extract_features(h1, h2, ref, word_dict, glove_sim, h1_vec, h2_vec,
 
     return [h1_met, h2_met, h1_bleu, h2_bleu, h1_gloves, h2_gloves,
         len(h1), len(h2), len(ref), h1_sim, h2_sim,
-        h1_score, h2_score]
+        h1_score, h2_score, h1_tag_met, h2_tag_met]
 
 def main():
     parser = argparse.ArgumentParser(description='Evaluate translation hypotheses.')

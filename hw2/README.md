@@ -38,9 +38,10 @@ translation.
 two hypotheses and the reference and took the cosine similarity between a hypothesis vector and the reference vector.
  - Language model: We used KenLM to build an order 3 language model trained on FR-EN Europarl English sentences.  The log probability of a hypothesis was used as
 a feature.
- - Simple METEOR: Harmonic mean of precision and recall of word matches between a hypothesis and a reference.
+ - Simple METEOR: Harmonic mean of precision and recall of both word and unigram POS matches between a hypothesis and a reference.
  - BLEU-4: BLEU score up to 4-grams with brevity penalty.
  - Sentence length: Length of each hypothesis and the reference.
 
 The original plan for the evaluator was to build a neural evaluator based on Baltescu & Blunsom (2015) with an alternate method for combining semantic vectors
-in a sentence.  However, due to concerns about overfitting, we are submitting the logistic regression evaluator for the assignment.
+in a sentence.  However, due to concerns about overfitting, we are submitting the logistic regression evaluator for the assignment (Please disregard Dan, he's
+being silly :P).
