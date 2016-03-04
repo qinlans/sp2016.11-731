@@ -1,7 +1,49 @@
 #!/usr/bin/env python
 import argparse # optparse is deprecated
+import math
+import numpy as np
+import sys
+from collections import namedtuple
 from itertools import islice # slicing for iterators
 from scipy import spatial
+from sklearn import linear_model
+
+ngram_stats = namedtuple("ngram_stats", "logprob, backoff")
+class LM:
+    def __init__(self, filename):
+        sys.stderr.write("Reading language model from %s...\n" % (filename,))
+        self.table = {}
+        for line in open(filename):
+            entry = line.strip().split("\t")
+            if len(entry) > 1 and entry[0] != "ngram":
+                (logprob, ngram, backoff) = (float(entry[0]), tuple(entry[1].split()), float(entry[2] if len(entry)==3 else 0.0))
+                self.table[ngram] = ngram_stats(logprob, backoff)
+
+    def begin(self):
+        return ("<s>",)
+
+    def score(self, state, word):
+        ngram = state + (word,)
+        score = 0.0
+        while len(ngram)> 0:
+            if ngram in self.table:
+                return (ngram[-2:], score + self.table[ngram].logprob)
+            else: #backoff
+                score += self.table[ngram[:-1]].backoff if len(ngram) > 1 else 0.0 
+                ngram = ngram[1:]
+        return ((), score + self.table[("<unk>",)].logprob)
+        
+    def end(self, state):
+        return self.score(state, "</s>")[1]
+
+    def sentence_score(self, sentence):
+        lm_state = self.begin() # initial state is always <s>
+        logprob = 0.0
+        for word in sentence.split():
+            (lm_state, word_logprob) = self.score(lm_state, word)
+            logprob += word_logprob
+        logprob += self.end(lm_state) # transition to </s>
+        return logprob
 
 # DRY
 def word_matches(h, ref):
@@ -9,40 +51,125 @@ def word_matches(h, ref):
     # or sum(w in ref for w in f) # cast bool -> int
     # or sum(map(ref.__contains__, h)) # ugly!
 
+def meteor(h, ref):
+    precision = float(word_matches(h, ref))/len(h)
+    recall = float(word_matches(h, ref))/len(ref)
+    if precision + recall == 0:
+        return 0
+
+    return 6 * precision * recall/(precision + 5 * recall) 
+
 def glove_fits(h, ref, gloves):
     cos_dis = 0
     n = 0
     for hw in h:
+        min_dist = 1
         for rw in ref:
             if hw in gloves and rw in gloves:
-                cos_dis += spatial.distance.cosine(gloves[hw], gloves[rw])
-    return cos_dis
+                if spatial.distance.cosine(gloves[hw], gloves[rw]) < min_dist:
+                    min_dist = spatial.distance.cosine(gloves[hw], gloves[rw])
+        cos_dis += min_dist
+    return (cos_dis/len(h))
+
+from collections import defaultdict
+
+def sub_in_vec(sub, vect):
+    for i in sub:
+        if i not in vect:
+            return False
+    return True
+
+def times_in_vec(sub, vect):
+    count = 0
+    for i in range(len(vect) - len(sub) + 1):
+        if vect[i:i+len(sub)] == sub:
+            count += 1
+    return count
+
+def n_gram_matches(h, ref, n):
+    h_countd = defaultdict(int)
+    if len(h) < n:
+        return 0
+
+    overlap_count = 0
+
+    for i in range(len(h) - n + 1):
+        if sub_in_vec(h[i:i+n], ref) and h_countd[tuple(h[i:i+n])] < times_in_vec(h[i:i+n], ref):
+            overlap_count += 1
+            h_countd[tuple(h[i:i+n])] += 1
+
+    return float(overlap_count)/(len(h) - n + 1)
+
+def bleu(h, ref):
+    geo_mean = 1
+    for i in range(1, 5):
+        geo_mean *= n_gram_matches(h, ref, i)
+
+    if len(h) >= len(ref):
+        bp = 1
+    else:
+        bp = math.exp(1 - float(len(h))/len(ref))
+    bleu = bp * math.pow(geo_mean, .25)
+    return bleu
+
+def extract_features(h1, h2, ref, word_dict, glove_sim, h1_vec, h2_vec,
+    ref_vec, lm):
+    features = defaultdict(float)
+
+    h1_met = meteor(h1, ref)
+    h2_met = meteor(h2, ref)
+    h1_bleu = bleu(h1, ref)
+    h2_bleu = bleu(h2, ref)
+    h1_gloves = float(glove_sim.split()[0])
+    h2_gloves = float(glove_sim.split()[1])
+    h1_sim = spatial.distance.cosine(h1_vec, ref_vec)
+    h2_sim = spatial.distance.cosine(h2_vec, ref_vec)
+
+    h1_sentence = ' '.join(h1)
+    h2_sentence = ' '.join(h2)
+    ref_sentence = ' '.join(ref)
+    h1_score = lm.sentence_score(h1_sentence)
+    h2_score = lm.sentence_score(h2_sentence)
+
+    return [h1_met, h2_met, h1_bleu, h2_bleu, h1_gloves, h2_gloves,
+        len(h1), len(h2), len(ref), h1_sim, h2_sim,
+        h1_score, h2_score]
 
 def main():
     parser = argparse.ArgumentParser(description='Evaluate translation hypotheses.')
     # PEP8: use ' and not " for strings
-    parser.add_argument('-i', '--input', default='data/train-test.hyp1-hyp2-ref',
+    parser.add_argument('-i', '--input', default='data/train-test.hyp1-hyp2-ref.tokenized',
             help='input file (default data/train-test.hyp1-hyp2-ref)')
     parser.add_argument('-n', '--num_sentences', default=None, type=int,
             help='Number of hypothesis pairs to evaluate')
-    parser.add_argument('-g', '--GloVe', default='data/glove.6B.50d.txt', type=int,
+    parser.add_argument('-t', '--training', default='data/train.gold',
+            help = 'Training gold')
+    parser.add_argument('-g', '--GloVe', default='data/glove.6B.50d.txt',
             help='GloVe vectors')
+    parser.add_argument('-s', '--glove_sim', default='data/glove_sim.txt',
+            help='GloVe similarity file')
+    parser.add_argument('-v', '--syn_vec', default='vectors.txt',
+            help='Suffix for sentence vector files')
+    parser.add_argument('-c', '--corpus', default='data/en.lm',
+            help='Language model')
     # note that if x == [1, 2, 3], then x[:None] == x[:] == x (copy); no need for sys.maxint
     opts = parser.parse_args()
+
+    lm = LM(opts.corpus)
  
     # we create a generator and avoid loading all sentences into a list
     def sentences():
         with open(opts.input) as f:
             for pair in f:
-                yield [sentence.strip().split() for sentence in pair.split(' ||| ')]
-    words = {}
+                yield [sentence.strip().lower().split() for sentence in pair.split(' ||| ')]
+    words = set() 
     for h1, h2, ref in islice(sentences(), opts.num_sentences):
         for word in h1:
-            words[word] = 1
+            words.add(word)
         for word in h2:
-            words[word] = 1
+            words.add(word)
         for word in ref:
-            words[word] = 1
+            words.add(word)
 
     word_dict = {}
     with open(opts.GloVe) as f:
@@ -52,28 +179,45 @@ def main():
             if word in words:
                 word_dict[word] = map(float, lines[1:])
 
+    training_features = []
+    training_classes = []
+    # Training
+    for ((h1, h2, ref), gold, glove_sim, h1_strvec, h2_strvec, ref_strvec) in \
+        zip(islice(sentences(), opts.num_sentences),
+        open(opts.training), open(opts.glove_sim), open("data/hyp1" + opts.syn_vec),
+        open("data/hyp2" + opts.syn_vec), open("data/ref" + opts.syn_vec)):
+
+        h1_vec = map(float, h1_strvec.split(','))
+        h2_vec = map(float, h2_strvec.split(','))
+        ref_vec = map(float, ref_strvec.split(','))
+
+        training_features.append(extract_features(h1, h2, ref, word_dict,
+            glove_sim, h1_vec, h2_vec, ref_vec, lm))
+        training_classes.append(int(gold))
+
+    X = np.asarray(training_features)
+    y = np.asarray(training_classes)
+    model = linear_model.LogisticRegression()
+    model.fit(X, y)
 
     # note: the -n option does not work in the original code
-    for h1, h2, ref in islice(sentences(), opts.num_sentences):
-        rset = set(ref)
-        h1_match = word_matches(h1, rset)
-        h2_match = word_matches(h2, rset)
-        h1_prec = float(h1_match)/len(h1)
-        h1_rec = float(h1_match)/len(ref)
-        if (h1_prec + 5* h1_rec) != 0:
-            h1_met = 6*h1_prec*h1_rec/(h1_prec + 5* h1_rec) 
+    for ((h1, h2, ref), glove_sim, h1_strvec, h2_strvec, ref_strvec) in \
+        zip(islice(sentences(), opts.num_sentences),
+        open(opts.glove_sim), open("data/hyp1" + opts.syn_vec),
+        open("data/hyp2" + opts.syn_vec), open("data/ref" + opts.syn_vec)):
+
+        h1_vec = map(float, h1_strvec.split(','))
+        h2_vec = map(float, h2_strvec.split(','))
+        ref_vec = map(float, ref_strvec.split(','))
+
+        if " ".join(h1) == " ".join(h2):
+            print 0
         else:
-            h1_met = 0
-        h2_prec = float(h2_match)/len(h2)
-        h2_rec = float(h2_match)/len(ref)
-        if (h2_prec + 5* h2_rec) != 0:
-            h2_met = 6*h2_prec*h2_rec/(h2_prec + 5* h2_rec) 
-        else:
-            h2_met = 0
-        if h1_met > h2_met:
-            print -1
-        else:
-            print 1
+            features = np.asarray([extract_features(h1, h2, ref, word_dict,
+                glove_sim, h1_vec, h2_vec, ref_vec, lm)])
+            result = model.predict(features)
+            print result.tolist()[0]
+
 # convention to allow import of this file as a module
 if __name__ == '__main__':
     main()

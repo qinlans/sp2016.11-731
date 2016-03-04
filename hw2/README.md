@@ -27,3 +27,20 @@ The `data/` directory contains the following two files:
  - `data/train.gold` contains gold standard human judgements indicating whether the first hypothesis (hyp1) or the second hypothesis (hyp2) is better or equally good/bad for training data.
 
 Until the deadline the scores shown on the leaderboard will be accuracy on the training set. After the deadline, scores on the blind test set will be revealed and used for final grading of the assignment.
+
+=======
+
+Strategies:
+For our evaluator, we built a logistic regression classifier using the following features from the data (tokenized and lowercased in cdec):
+ - Pre-trained 50-dimension GloVe vector representations:  We averaged the minimum cosine similarity between each word in a hypothesis and a word in the reference
+translation.
+ - Socher et al (2011) Dynamic Pooling And Unfolding Recursive Autoencoders For Paraphrase Detection:  We learned a vector representation for each sentence in the
+two hypotheses and the reference and took the cosine similarity between a hypothesis vector and the reference vector.
+ - Language model: We used KenLM to build an order 3 language model trained on FR-EN Europarl English sentences.  The log probability of a hypothesis was used as
+a feature.
+ - Simple METEOR: Harmonic mean of precision and recall of word matches between a hypothesis and a reference.
+ - BLEU-4: BLEU score up to 4-grams with brevity penalty.
+ - Sentence length: Length of each hypothesis and the reference.
+
+The original plan for the evaluator was to build a neural evaluator based on Baltescu & Blunsom (2015) with an alternate method for combining semantic vectors
+in a sentence.  However, due to concerns about overfitting, we are submitting the logistic regression evaluator for the assignment.
