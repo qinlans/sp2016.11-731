@@ -11,6 +11,23 @@ import operator
 
 from collections import namedtuple
 
+# Three little utility functions:
+def coverage(sequence):
+    # Generate a coverage for a sequence of indexes #
+    # You can do things like:
+    #   c1 | c2 to "add" coverages
+    #   c1 & c2 will return 0 if c1 and c2 do NOT overlap
+    #   c1 & c2 will be != 0 if c1 and c2 DO overlap
+    return reduce(lambda x,y: x|y, map(lambda i: long(1) << i, sequence), 0)
+
+def coverage2str(c, n, on='o', off='.'):
+    # Generate a length-n string representation of coverage c #
+    return '' if n==0 else (on if c&1==1 else off) + coverage2str(c>>1, n-1, on, off)
+
+def logadd(x,y):
+    # Addition in logspace: if x=log(a) and y=log(b), return log(a+b) #
+    return x + math.log(1 + math.exp(y-x)) if y < x else y + math.log(1 + math.exp(x-y))
+
 def contains_sublist(lst, sublst):
     n = len(sublst)
     return any((sublst == lst[i:i+n]) for i in xrange(len(lst)-n+1))
@@ -29,143 +46,52 @@ lm = models.LM(opts.lm)
 sys.stderr.write('Decoding %s...\n' % (opts.input,))
 input_sents = [tuple(line.strip().split()) for line in open(opts.input).readlines()[:opts.num_sents]]
 
+def score_sentence_pair(f, e):
+    sent_logprob = 0.0
+    # compute p(e) under the LM
+    lm_state = lm.begin()
+    lm_logprob = 0.0
+    for word in e + ("</s>",):
+        (lm_state, word_logprob) = lm.score(lm_state, word)
+        lm_logprob += word_logprob
+    sent_logprob += lm_logprob
+
+    # alignments[i] is a list of all the phrases in f that could have
+    # generated phrases starting at position i in e
+    alignments = [[] for _ in e]
+    for fi in xrange(len(f)):
+        for fj in xrange(fi+1,len(f)+1):
+            if f[fi:fj] in tm:
+                for phrase in tm[f[fi:fj]]:
+                    ephrase = tuple(phrase.english.split())
+                    for ei in xrange(len(e)+1-len(ephrase)):
+                        ej = ei+len(ephrase)
+                        if ephrase == e[ei:ej]:
+                            alignments[ei].append((ej, phrase.logprob, fi, fj))
+
+    # Compute sum of probability of all possible alignments by dynamic programming.
+    # To do this, recursively compute the sum over all possible alignments for each
+    # each pair of English prefix (indexed by ei) and French coverage (indexed by 
+    # coverage v), working upwards from the base case (ei=0, v=0) [i.e. forward chaining]. 
+    # The final sum is the one obtained for the pair (ei=len(e), v=range(len(f))
+    chart = [{} for _ in e] + [{}]
+    chart[0][0] = 0.0
+    for ei, sums in enumerate(chart[:-1]):
+        for v in sums:
+            for ej, logprob, fi, fj in alignments[ei]:
+                if coverage(range(fi,fj)) & v == 0:
+                    new_v = coverage(range(fi,fj)) | v
+                    if new_v in chart[ej]:
+                        chart[ej][new_v] = logadd(chart[ej][new_v], sums[v]+logprob)
+                    else:
+                        chart[ej][new_v] = sums[v]+logprob
+    goal = coverage(range(len(f)))
+    if goal in chart[len(e)]:
+        sent_logprob += chart[len(e)][goal]
+    return sent_logprob
+
 hypothesis = namedtuple('hypothesis', 'logprob, lm_state, predecessor, phrase, start, end')
 sample_hypothesis = namedtuple('sample_hypothesis', 'lm_state, phrase, start, end')
-
-def retranslate_prob(possible_translations, lm_state, next_word_logprob):
-    rp = [0] * len(possible_translations)
-    for k in range(len(rp)):
-        t = possible_translations[k]
-        rp[k] += t.logprob
-        for word in t.english.split():
-            (lm_state, word_logprob) = lm.score(lm_state, word)
-            rp[k] += word_logprob
-
-        rp[k] += next_word_logprob
-
-    Z = [math.exp(float(x)) for x in rp]
-    return [float(x)/sum(Z) for x in Z]
-
-def reorder_prob(possible_positions, original_pos, hypotheses):
-    rp = [0] * len(possible_positions)
-    if original_pos == 0:
-        original_lm_state = lm.begin()
-    else:
-        original_lm_state = hypotheses[original_pos - 1].lm_state
-    p1 = hypotheses[original_pos].phrase
-
-    for k in range(len(rp)):
-        pos = possible_positions[k]
-        if pos == 0:
-            swap_lm_state = lm.begin()
-        else:
-            swap_lm_state = hypotheses[pos - 1].lm_state
-        p2 = hypotheses[pos].phrase
-
-        lm_state = original_lm_state
-        for word in p2.english.split():
-            (lm_state, word_logprob) = lm.score(lm_state, word)
-            rp[k] += word_logprob
-        (_, next_word_logprob) = lm.score(lm_state, hypotheses[original_pos + 1].phrase.english.split()[0])
-        rp[k] += next_word_logprob
-
-        lm_state = swap_lm_state
-        for word in p1.english.split():
-            (lm_state, word_logprob) = lm.score(lm_state, word)
-            rp[k] += word_logprob
-        (_, next_word_logprob) = lm.score(lm_state, hypotheses[pos + 1].phrase.english.split()[0])
-        rp[k] += next_word_logprob
-
-    Z = [math.exp(float(x)) for x in rp]
-    return [float(x)/sum(Z) for x in Z]
-
-def sample(hypotheses, phrase_dict):
-    translations = dict()
-    sample_hypotheses = [] 
-
-    for h in hypotheses:
-        sample_hypotheses.append(sample_hypothesis(h.lm_state, h.phrase, h.start, h.end))
-
-    for i in range(50000):
-        for j in range(len(sample_hypotheses)):
-            # Retranslate
-            sh = sample_hypotheses[j]
-            possible_translations = phrase_dict[(sh.start, sh.end)]
-            if j == 0:
-                lm_state = lm.begin()
-            else:
-                lm_state = sample_hypotheses[j - 1].lm_state
-            if j + 1 == len(sample_hypotheses):
-                next_word_logprob = lm.end(lm_state)
-            else:
-                (_, next_word_logprob) = lm.score(lm_state, sample_hypotheses[j+1].phrase.english.split()[0])
-
-            normalized = retranslate_prob(possible_translations, lm_state, next_word_logprob)
-            print normalized
-            prob = random.random()
-            for k in range(len(normalized)):
-                prob -= normalized[k]
-                if prob < 0.0:
-                    break
-
-            # Rebuild the sample hypotheses
-            if j == 0:
-                lm_state = lm.begin()
-            else:
-                lm_state = sample_hypotheses[j - 1].lm_state
-
-            for word in possible_translations[k].english.split():
-                (lm_state, _) = lm.score(lm_state, word)
-            sample_hypotheses[j] = sample_hypothesis(lm_state, possible_translations[k], sh.start, sh.end)
-
-            # Reorder
-            if j == len(sample_hypotheses) - 1:
-                continue
-            sh = sample_hypotheses[j]
-            possible_positions = []
-            for k in range(-2, 3):
-                if j + k < 0 or j + k >= len(sample_hypotheses) - 1:
-                    continue
-                possible_positions.append(j + k)
-
-            normalized = reorder_prob(possible_positions, j, sample_hypotheses)
-            print normalized
-            prob = random.random()
-            for k in range(len(normalized)):
-                prob -= normalized[k]
-                if prob < 0.0:
-                    break
-
-            # Rebuild the sample hypotheses
-            swh = sample_hypotheses[possible_positions[k]]
-            if j == 0:
-                lm_state = lm.begin()
-            else:
-                lm_state = sample_hypotheses[j - 1].lm_state
-
-            for word in swh.phrase.english.split():
-                (lm_state, _) = lm.score(lm_state, word)
-            sample_hypotheses[j] = sample_hypothesis(lm_state, swh.phrase, swh.start, swh.end)
-
-
-            if possible_positions[k] == 0:
-                lm_state = lm.begin()
-            else:
-                lm_state = sample_hypotheses[possible_positions[k] - 1].lm_state
-
-            for word in sh.phrase.english.split():
-                (lm_state, _) = lm.score(lm_state, word)
-            sample_hypotheses[possible_positions[k]] = sample_hypothesis(lm_state, sh.phrase, sh.start, sh.end)
-
-        sentence = ' '.join([x.phrase.english for x in sample_hypotheses])
-        coverage_alignment = [(x.start, x.end) for x in sample_hypotheses]
-        if not sentence in translations:
-            translations[sentence] = 1
-        else:
-            translations[sentence] += 1
-
-    print max(translations.iteritems(), key=operator.itemgetter(1))[0]
-
 
 for f in input_sents:
     # The following code implements a DP monotone decoding
@@ -189,29 +115,46 @@ for f in input_sents:
                     if f[i:k] in tm:
                         for j in range(k+1,len(f)+1):
                             if f[k:j] in tm:
-                                new_stacks = []
-                                for phrase in tm[f[k:j]]:
-                                    logprob = h.logprob + phrase.logprob
-                                    lm_state = h.lm_state
-                                    for word in phrase.english.split():
-                                        (lm_state, word_logprob) = lm.score(lm_state, word)
-                                        logprob += word_logprob
-                                    logprob += lm.end(lm_state) if j == len(f) else 0.0
-                                    new_hypothesis = hypothesis(logprob, lm_state, h, phrase, k, j)
-                                    new_stacks.append(new_hypothesis)
+                                for l in range(j+1,len(f)+1):
+                                    if f[j:l] in tm:
+                                        phrases = [(i,k),(k,j),(j,l)]
+                                        phrase_permutations = itertools.permutations(phrases, 3)
+                                        for p in phrase_permutations:
+                                            new_stacks = []
+                                            for phrase in tm[f[p[0][0]:p[0][1]]]:
+                                                logprob = h.logprob + phrase.logprob
+                                                lm_state = h.lm_state
+                                                for word in phrase.english.split():
+                                                    (lm_state, word_logprob) = lm.score(lm_state, word)
+                                                    logprob += word_logprob
+                                                logprob += lm.end(lm_state) if p[0][1] == len(f) else 0.0
+                                                new_hypothesis = hypothesis(logprob, lm_state, h, phrase, p[0][0], p[0][1])
+                                                new_stacks.append(new_hypothesis)
 
-                                for hi in new_stacks:
-                                    for phrase in tm[f[i:k]]:
-                                        logprob = hi.logprob + phrase.logprob
-                                        lm_state = hi.lm_state
-                                        for word in phrase.english.split():
-                                            (lm_state, word_logprob) = lm.score(lm_state, word)
-                                            logprob += word_logprob
-                                        logprob += lm.end(lm_state) if k == len(f) else 0.0
-                                        new_hypothesis = hypothesis(logprob, lm_state, hi, phrase, i, k)
+                                            new_stacks2 = []
+                                            for hi in new_stacks:
+                                                for phrase in tm[f[p[1][0]:p[1][1]]]:
+                                                    logprob = hi.logprob + phrase.logprob
+                                                    lm_state = hi.lm_state
+                                                    for word in phrase.english.split():
+                                                        (lm_state, word_logprob) = lm.score(lm_state, word)
+                                                        logprob += word_logprob
+                                                    logprob += lm.end(lm_state) if p[1][1] == len(f) else 0.0
+                                                    new_hypothesis = hypothesis(logprob, lm_state, hi, phrase, p[1][0], p[1][1])
+                                                    new_stacks2.append(new_hypothesis)
 
-                                        if lm_state not in stacks[j] or stacks[j][lm_state].logprob < logprob: # second case is recombination
-                                            stacks[j][lm_state] = new_hypothesis 
+                                            for hj in new_stacks2:
+                                                for phrase in tm[f[p[2][0]:p[2][1]]]:
+                                                    logprob = hj.logprob + phrase.logprob
+                                                    lm_state = hj.lm_state
+                                                    for word in phrase.english.split():
+                                                        (lm_state, word_logprob) = lm.score(lm_state, word)
+                                                        logprob += word_logprob
+                                                    logprob += lm.end(lm_state) if p[2][1] == len(f) else 0.0
+                                                    new_hypothesis = hypothesis(logprob, lm_state, hj, phrase, p[2][0], p[2][1])
+
+                                                    if lm_state not in stacks[l] or stacks[l][lm_state].logprob < logprob: # second case is recombination
+                                                        stacks[l][lm_state] = new_hypothesis 
 
         # extend the top s hypotheses in the current stack
         for h in heapq.nlargest(opts.s, stacks[i].itervalues(), key=lambda h: h.logprob): # prune
@@ -235,6 +178,8 @@ for f in input_sents:
     # find best translation by looking at the best scoring hypothesis
     # on the last stack
     winner = max(stacks[-1].itervalues(), key=lambda h: h.logprob)
+    def extract_english_recursive(h):
+        return '' if h.predecessor is None else '%s%s ' % (extract_english_recursive(h.predecessor), h.phrase.english)
 
     def extract_hypotheses_recursive(h):
         if h.predecessor is None:
@@ -245,7 +190,20 @@ for f in input_sents:
             return hs
 
     hypotheses = extract_hypotheses_recursive(winner)
-    sample(hypotheses, phrase_dict)
+    K = 5
+    best = -1e9
+    best_sentence = extract_hypotheses_recursive(winner)
+    rerank = heapq.nlargest(K, stacks[-1].itervalues(), key=lambda h: h.logprob)
+    for i in range(len(rerank)):
+        rerank_hs = extract_hypotheses_recursive(rerank[i])
+        sentence = tuple([x.phrase.english for x in rerank_hs])
+        score = score_sentence_pair(f, sentence)
+        if score > best:
+            best = score
+            best_sentence = sentence
+
+    print ' '.join(list(best_sentence))
+    #sample(hypotheses, phrase_dict, winner.logprob)
 
     if opts.verbose:
         def extract_tm_logprob(h):
