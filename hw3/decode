@@ -190,13 +190,12 @@ for f in input_sents:
             return hs
 
     hypotheses = extract_hypotheses_recursive(winner)
-    K = 5
+    K = 20
     best = -1e9
     best_sentence = extract_hypotheses_recursive(winner)
     rerank = heapq.nlargest(K, stacks[-1].itervalues(), key=lambda h: h.logprob)
     for i in range(len(rerank)):
-        rerank_hs = extract_hypotheses_recursive(rerank[i])
-        sentence = tuple([x.phrase.english for x in rerank_hs])
+        sentence = tuple(extract_english_recursive(rerank[i]).split())
         score = score_sentence_pair(f, sentence)
         if score > best:
             best = score
