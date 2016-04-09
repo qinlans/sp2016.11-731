@@ -1,6 +1,3 @@
-The two strategies we used were extending the baseline so that we can have any permutation in order of three phrases
-and reranking the k-best hypotheses using the scoring function of the ./grade file
-
 There are three Python programs here (`-h` for usage):
 
  - `./decode` a simple non-reordering (monotone) phrase-based decoder
