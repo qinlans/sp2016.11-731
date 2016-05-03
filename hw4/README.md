@@ -1,12 +1,23 @@
-There are two Python programs here:
+Strategies:
+We implemented a global attentional model that took into account the positions of the current target word, the source words, and the length
+of the source sentence when calculating the multiplier for the source encodings.  The previous hidden state of the decoder, the encoded source
+word, and this position factor were concatenated to form a matrix, which was then multiplied with an alignment matrix and passed through a
+non-linearity to generate a weight vector over the source encodings.  Each source encoding was multiplied by its weight and the resulting
+vectors were added to give us a context vector.  The context vector was concatenated with the previously decoded word, which was then fed
+to the decoder's hidden state RNN.
 
- - `python bleu.py your-output.txt ref.txt` to compute the BLEU score of your output against the reference translation.
- - `python rnnlm.py ref.txt` trains an LSTM language model, just for your reference if you want to use pyCNN to perform this assignment.
+We also used a bidirectional LSTM for the encoder.
 
-The `data/` directory contains the files needed to develop the MT system:
+Building:
+This program is built similarly to cnn and requires Eigen.
 
- - `data/train.*` the source and target training files.
+In `src`, you need to first use [`cmake`](http://www.cmake.org/) to generate the makefiles
 
- - `data/dev.*` the source and target development files.
+    mkdir build
+    cd build
+    cmake .. -DEIGEN3_INCLUDE_DIR=/path/to/eigen
 
- - `data/test.src` the source side of the blind test set.
+Then to compile, run
+
+    make -j 2
+
